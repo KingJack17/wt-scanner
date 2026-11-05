@@ -63,7 +63,7 @@ def _yf_download(tickers: list[str], period: str, chunk: int) -> dict[str, pd.Da
         for attempt in range(3):
             try:
                 raw = yf.download(part, period=period, interval="1d", group_by="ticker",
-                                  auto_adjust=True, threads=True, progress=False)
+                                  auto_adjust=False, threads=True, progress=False)
                 break
             except Exception as e:  # ağ hatası → tekrar dene
                 log.warning("yfinance hata (%s), tekrar deneniyor: %s", attempt + 1, e)
