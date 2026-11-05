@@ -1,0 +1,95 @@
+name: scan
+
+on:
+  schedule:
+    - cron: "40 21 * * 1-5"   # US
+    - cron: "0 16 * * 1-5"    # BIST
+    - cron: "15 0 * * *"      # Kripto
+  workflow_dispatch:
+    inputs:
+      market:
+        description: "Piyasa"
+        type: choice
+        default: all
+        options: [all, us, crypto, bist]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: wtapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: wtapp/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Önceki durumu geri yükle
+        uses: actions/cache/restore@v4
+        with:
+          path: wtapp/state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Piyasayı belirle
+        id: m
+        run: |
+          MARKET="${{ github.event.inputs.market }}"
+          case "${{ github.event.schedule }}" in
+            "40 21 * * 1-5") MARKET=us ;;
+            "0 16 * * 1-5")  MARKET=bist ;;
+            "15 0 * * *")    MARKET=crypto ;;
+          esac
+          echo "market=${MARKET:-all}" >> "$GITHUB_OUTPUT"
+
+      - name: WT parametreleri (uygulamadan kaydedilen)
+        run: if [ -f ../wt_params.json ]; then cp ../wt_params.json wt_params.json; fi
+
+      - name: Tara
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scan.py --market ${{ steps.m.outputs.market }} --tf both
+
+      - name: Durumu kaydet
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: wtapp/state
+          key: state-${{ github.run_id }}
+
+      - name: Siteyi hazırla
+        run: |
+          mkdir -p _site
+          cp -r docs/. _site/
+          cp -r state/data _site/data
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: wtapp/_site
+
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
