@@ -91,13 +91,26 @@ function analyze(b, cfg, wt) {
       nearOS[i] = i - lastOS <= k; nearOB[i] = i - lastOB <= k;
     }
     R.nearOS = nearOS; R.nearOB = nearOB;
+    // WT alpha alarmı: bölge içinde WT1/WT2 kesişimi (TradingView'daki sarı daireler)
+    const w1 = R.wt.wt1, w2 = R.wt.wt2;
+    R.wtxUp = w1.map((v, i) => i > 0 && !isNaN(w2[i]) && !isNaN(w2[i - 1]) && v > w2[i] && !(w1[i - 1] > w2[i - 1]) && v < wt.os_level1);
+    R.wtxDn = w1.map((v, i) => i > 0 && !isNaN(w2[i]) && !isNaN(w2[i - 1]) && v < w2[i] && !(w1[i - 1] < w2[i - 1]) && v > wt.ob_level1);
+    R.wtxAll = w1.map((v, i) => i > 0 && !isNaN(w2[i]) && !isNaN(w2[i - 1]) && (v > w2[i]) !== (w1[i - 1] > w2[i - 1]));
+    if (cfg.wtx && cfg.wtx.on) { ev.BULL.WTX = R.wtxUp; ev.BEAR.WTX = R.wtxDn; }
   }
   R.ev = ev;
+  /** dir yönündeki son bölge içi WT kesişiminden bu yana geçen bar (yoksa null) */
+  R.wtxAgo = dir => {
+    const e = dir === "BULL" ? R.wtxUp : R.wtxDn; if (!e) return null;
+    for (let i = L - 1; i >= 0; i--) if (e[i]) return L - 1 - i;
+    return null;
+  };
+  const win = n => n === "WTX" ? +((cfg.wtx && cfg.wtx.lookback) || 3) : +cfg.lookback;
   /** i. barda dir yönünde sinyal var mı? → null | {strength, trig:[...]} */
   R.signalAt = (i, dir) => {
     const names = Object.keys(ev[dir]);
     if (!names.length) return null;
-    const hit = names.filter(n => inWin(ev[dir][n], i, +cfg.lookback));
+    const hit = names.filter(n => inWin(ev[dir][n], i, win(n)));
     const ok = cfg.combine === "all" ? hit.length === names.length : hit.length > 0;
     if (!ok) return null;
     const rOk = dir === "BULL" ? R.rsiOkBull[i] : R.rsiOkBear[i];

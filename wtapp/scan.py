@@ -20,7 +20,7 @@ import yaml
 import data as D
 import db as DB
 import export as X
-from indicators import wavetrend, supertrend, ema, rsi, crossed_above, crossed_below
+from indicators import wavetrend, supertrend, ema, rsi, crossed_above, crossed_below, wt_zone_cross
 
 log = logging.getLogger("wtscanner")
 TF_MAP = {"daily": ("short", "daily"), "weekly": ("long", "weekly")}
@@ -96,8 +96,14 @@ def stage1(con, universe: dict, tf: str, cfg) -> dict[str, list]:
 
 
 # ================================================================== Aşama 2
-def check_breakout(df: pd.DataFrame, direction: str, bc: dict) -> dict:
+def check_breakout(df: pd.DataFrame, direction: str, bc: dict, wc: dict) -> dict:
     lb, rlb = bc["lookback"], bc["rsi_lookback"]
+    d = False
+    if bc.get("wt_cross", True):
+        wt1, wt2 = wavetrend(df, wc["n1"], wc["n2"], wc["signal"])
+        up, dn = wt_zone_cross(wt1, wt2, wc["os_level1"], wc["ob_level1"])
+        ev = up if direction == "BULL" else dn
+        d = bool(ev.iloc[-bc.get("wt_cross_lookback", 3):].any())
     _, st_dir = supertrend(df, bc["supertrend_atr"], bc["supertrend_mult"])
     ef, es = ema(df["close"], bc["ema_fast"]), ema(df["close"], bc["ema_slow"])
     r = rsi(df["close"], bc["rsi_len"])
@@ -115,7 +121,7 @@ def check_breakout(df: pd.DataFrame, direction: str, bc: dict) -> dict:
             c = bool(r.iloc[-1] < 50)
         else:
             c = crossed_below(r, 50, rlb) or crossed_below(r, 70, rlb)
-    return {"A": a, "B": b, "C": c, "rsi": round(float(r.iloc[-1]), 1)}
+    return {"A": a, "B": b, "C": c, "D": d, "rsi": round(float(r.iloc[-1]), 1)}
 
 
 def stage2(con, universe: dict, tf: str, cfg) -> list[dict]:
@@ -136,14 +142,14 @@ def stage2(con, universe: dict, tf: str, cfg) -> list[dict]:
                 continue
             df = d[frame]
             for dr in dirs:
-                t = check_breakout(df, dr, bc)
-                if not (t["A"] or t["B"]):
+                t = check_breakout(df, dr, bc, cfg["wavetrend"])
+                if not (t["A"] or t["B"] or t["D"]):
                     continue
                 out.append({
                     "scan_time": now, "bar_date": row["bar_date"], "symbol": row["symbol"],
                     "tv_symbol": row["tv_symbol"], "list_name": table, "timeframe": frame,
                     "direction": dr, "strength": "STRONG" if t["C"] else "WEAK",
-                    "trig_supertrend": int(t["A"]), "trig_ema": int(t["B"]), "trig_rsi": int(t["C"]),
+                    "trig_supertrend": int(t["A"]), "trig_ema": int(t["B"]), "trig_rsi": int(t["C"]), "trig_wtx": int(t["D"]),
                     "zone_level": row["zone_level"], "status": row["status"],
                     "bars_in_zone": row["bars_in_zone"], "bars_since_exit": row["bars_since_exit"],
                     "wt1": row["wt1"], "rsi": t["rsi"], "close": row["close"],
@@ -162,6 +168,7 @@ def report(market: str, tf: str, signals: list[dict], cfg):
     df = pd.DataFrame(signals)
     df["triggers"] = (df["trig_supertrend"].map({1: "ST ", 0: ""}) +
                       df["trig_ema"].map({1: "EMA ", 0: ""}) +
+                      df["trig_wtx"].map({1: "WTX ", 0: ""}) +
                       df["trig_rsi"].map({1: "RSI", 0: ""})).str.strip()
     df = df.sort_values(["strength", "list_name", "zone_level"], ascending=[True, True, False])
     cols = ["symbol", "list_name", "direction", "strength", "triggers", "zone_level",

@@ -83,3 +83,16 @@ def crossed_below(a: pd.Series, b, lookback: int) -> bool:
     below = a < b
     cross = below & ~below.shift(1, fill_value=True)
     return bool(cross.iloc[-lookback:].any())
+
+
+def wt_zone_cross(wt1: pd.Series, wt2: pd.Series, os_level: float, ob_level: float):
+    """WT alpha (TradingView) alarmı: bölge içinde WT1/WT2 kesişimi.
+    up: WT1, WT2'yi yukarı kesti ve WT1 < os_level  → yükseliş
+    dn: WT1, WT2'yi aşağı kesti ve WT1 > ob_level   → düşüş
+    """
+    above = wt1 > wt2
+    prev = above.shift(1)
+    valid = wt2.notna() & wt2.shift(1).notna()
+    up = valid & above & (prev == False) & (wt1 < os_level)
+    dn = valid & ~above & (prev == True) & (wt1 > ob_level)
+    return up.fillna(False), dn.fillna(False)

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS signals (
     trig_supertrend INTEGER,
     trig_ema     INTEGER,
     trig_rsi     INTEGER,
+    trig_wtx     INTEGER,
     zone_level   TEXT,
     status       TEXT,
     bars_in_zone INTEGER,
@@ -58,6 +59,9 @@ def connect(db_dir: str, market: str) -> sqlite3.Connection:
     for t in LISTS:
         con.execute(WATCHLIST_SCHEMA.format(t=t))
     con.execute(SIGNALS_SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(signals)")}
+    if "trig_wtx" not in cols:  # önceki sürümden kalan veritabanı
+        con.execute("ALTER TABLE signals ADD COLUMN trig_wtx INTEGER")
     con.commit()
     return con
 

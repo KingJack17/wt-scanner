@@ -17,10 +17,10 @@ wavetrend:
   n1: 10                # channel length
   n2: 21                # average length
   signal: 4             # WT2 = SMA(WT1, signal)
-  os_level1: -45        # OS1: -45 ile -55 arası
-  os_level2: -55        # OS2: -55 altı
-  ob_level1: 45         # OB1: 45 ile 55 arası
-  ob_level2: 55         # OB2: 55 üstü
+  os_level1: -45        # OS1: -45 ile -53 arası
+  os_level2: -53        # OS2: -53 altı
+  ob_level1: 45         # OB1: 45 ile 53 arası
+  ob_level2: 53         # OB2: 53 üstü
   keep_after_exit: 10   # bölgeden çıktıktan sonra kaç bar daha listede kalsın
 
 # ---------- Kırılım (Aşama 2) ----------
@@ -32,6 +32,8 @@ breakout:
   rsi_len: 14
   lookback: 2           # Supertrend/EMA kesişimi son kaç bar içinde olmuş olmalı
   rsi_lookback: 3       # RSI teyidi son kaç bar içinde
+  wt_cross: true        # WT1/WT2 bölge içi kesişimi tetikleyici olsun mu
+  wt_cross_lookback: 3  # WT kesişimi son kaç bar içinde
   rsi_mode: cross       # cross = 50/30/70 kesişimi | level = RSI 50'nin doğru tarafında
   overbought_bullish_continuation: false   # true: OB listesinde yükseliş devam sinyali de ara
   oversold_bearish_continuation: false     # true: OS listesinde düşüş devam sinyali de ara

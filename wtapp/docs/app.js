@@ -10,6 +10,7 @@ const DEFAULTS = {
   st:   { on: true,  atr: 10, mult: 3 },
   ema:  { on: true,  fast: 5, slow: 12 },
   macd: { on: false, fast: 12, slow: 26, sig: 9 },
+  wtx:  { on: true,  lookback: 3 },
   combine: "any",              // any = herhangi biri, all = hepsi
   rsi: { role: "confirm", len: 14, mode: "cross" },   // confirm | require | off
   lookback: 2, rsiLookback: 3,
@@ -29,7 +30,7 @@ function mergeDeep(base, over) {
   return out;
 }
 let CFG = mergeDeep(DEFAULTS, store.get("wt_cfg", {}));
-const UI = Object.assign({ market: "us", tf: "daily", view: "signals", fSig: "all", fList: "all", deep: false },
+const UI = Object.assign({ market: "us", tf: "daily", view: "signals", fSig: "all", fList: "all", deep: false, wtxOnly: false },
                          store.get("wt_ui", {}));
 
 const { ema, analyze } = window.WTI;
@@ -66,7 +67,8 @@ function computeSignals() {
   for (const side of ["oversold", "overbought"]) {
     for (const row of DS.lists[side]) {
       const b = DS.bars[row.s]; if (!b || b.c.length < 30) continue;
-      const R = analyze(b, CFG, null);
+      const R = analyze(b, CFG, DS.wt);
+      row._wtx = R.wtxAgo(side === "oversold" ? "BULL" : "BEAR");
       for (const dir of dirsFor(side)) {
         const sg = R.signalAt(R.L - 1, dir);
         if (sg) SIGNALS.push({ row, side, dir, ...sg, rsi: R.rsi[R.L - 1] });
@@ -107,9 +109,11 @@ function renderChips() {
     const opts = [["all", "Hepsi"], ["strong", "Güçlü"], ["weak", "Zayıf"], ["bull", "▲ Yükseliş"], ["bear", "▼ Düşüş"]];
     c.innerHTML = opts.map(([v, t]) => `<button class="chip ${UI.fSig === v ? "on" : ""}" data-f="fSig" data-v="${v}">${t}</button>`).join("");
   } else {
-    const deepName = UI.view === "oversold" ? "Sadece OS2 (−55 altı)" : "Sadece OB2 (55 üstü)";
+    const wtp = (DS && DS.wt) || {};
+    const deepName = UI.view === "oversold" ? `Sadece OS2 (${wtp.os_level2 ?? -53} altı)` : `Sadece OB2 (${wtp.ob_level2 ?? 53} üstü)`;
     const opts = [["all", "Hepsi"], ["active", "Bölgede"], ["exited", "Çıkmış"]];
     c.innerHTML = opts.map(([v, t]) => `<button class="chip ${UI.fList === v ? "on" : ""}" data-f="fList" data-v="${v}">${t}</button>`).join("") +
+      `<button class="chip ${UI.wtxOnly ? "on" : ""}" data-f="wtxOnly" data-v="1">WT kesişimi · son ${CFG.wtx.lookback} bar</button>` +
       `<button class="chip ${UI.deep ? "on" : ""}" data-f="deep" data-v="1">${deepName}</button>`;
   }
 }
@@ -124,7 +128,8 @@ function currentItems() {
        (UI.fSig === "bull" && x.dir === "BULL") || (UI.fSig === "bear" && x.dir === "BEAR")));
   }
   const deepLvl = UI.view === "oversold" ? "OS2" : "OB2";
-  return DS.lists[UI.view].filter(r => match(r.s) && (UI.fList === "all" || r.st === UI.fList) && (!UI.deep || r.zl === deepLvl))
+  return DS.lists[UI.view].filter(r => match(r.s) && (UI.fList === "all" || r.st === UI.fList) && (!UI.deep || r.zl === deepLvl) &&
+      (!UI.wtxOnly || (r._wtx != null && r._wtx < +CFG.wtx.lookback)))
     .slice().sort((a, b) => (a.st === b.st ? 0 : a.st === "active" ? -1 : 1) || Math.abs(b.w1) - Math.abs(a.w1))
     .map(r => ({ row: r, side: UI.view }));
 }
@@ -143,6 +148,8 @@ function cardHTML(x, idx) {
     tags += x.trig.map(t => `<span class="tag trig">${t}</span>`).join("");
   }
   tags += `<span class="tag ${/2$/.test(r.zl) ? "deep" : ""}">${r.zl}</span>`;
+  if (r._wtx != null && r._wtx <= 10 && !(x.trig && x.trig.includes("WTX")))
+    tags += `<span class="tag ${r._wtx < +CFG.wtx.lookback ? "wtx" : ""}">WT✕ ${r._wtx === 0 ? "son bar" : r._wtx + " bar önce"}</span>`;
   if (x.dir) tags += `<span class="tag">${x.side === "oversold" ? "OS listesi" : "OB listesi"}</span>`;
   const rsiPart = x.rsi != null ? `<span>RSI <b>${x.rsi.toFixed(0)}</b></span>` : "";
   return `<button class="card ${dirCls}" data-i="${idx}">
@@ -179,11 +186,12 @@ function describeRule() {
   if (CFG.st.on) t.push(`Supertrend(${CFG.st.atr}, ${CFG.st.mult})`);
   if (CFG.ema.on) t.push(`EMA ${CFG.ema.fast}/${CFG.ema.slow}`);
   if (CFG.macd.on) t.push(`MACD ${CFG.macd.fast}/${CFG.macd.slow}/${CFG.macd.sig}`);
+  if (CFG.wtx.on) t.push(`WT kesişimi (son ${CFG.wtx.lookback} bar)`);
   if (!t.length) return "Hiç tetikleyici seçili değil. Ayarlardan en az birini aç.";
   const join = CFG.combine === "all" ? " ve " : " veya ";
   const r = CFG.rsi.role === "off" ? "RSI kullanılmıyor" :
     `RSI(${CFG.rsi.len}) ${CFG.rsi.mode === "cross" ? "kesişimi" : "50 seviyesi"} ${CFG.rsi.role === "require" ? "zorunlu" : "güçlü/zayıf ayrımı için"}`;
-  return `Kural: ${t.join(join)} son ${CFG.lookback} barda tetiklendi · ${r}.`;
+  return `Kural: ${t.join(join)} tetiklendi (göstergeler için son ${CFG.lookback} bar) · ${r}.`;
 }
 
 // ------------------------------------------------------------ grafik
@@ -251,7 +259,7 @@ function drawChart(box, b, row) {
       if (lvl > pl) {
         const strong = lvl === 2;
         markers.push({ time: T[i], position: dir === "BULL" ? "belowBar" : "aboveBar",
-          color: strong ? (dir === "BULL" ? bull : bear) : acc,
+          color: strong ? (dir === "BULL" ? bull : bear) : "#9aa5b4",
           shape: strong ? (dir === "BULL" ? "arrowUp" : "arrowDown") : "circle",
           size: strong ? 1.3 : 0.8 });
       }
@@ -263,16 +271,16 @@ function drawChart(box, b, row) {
 
   // WT paneli
   let pane = 1;
-  const w1 = line(pts(R.wt.wt1), "#6aa6f8", 1.6, pane, { lastValueVisible: true });
+  const w1 = line(pts(R.wt.wt1), bull, 1.6, pane, { lastValueVisible: true });   // TradingView WT Alpha: WT1 yeşil, WT2 kırmızı
   line(pts(R.wt.wt2), "rgba(236,91,86,.85)", 1.2, pane);
   for (const [v, c] of [[wt.ob_level2, bear], [wt.ob_level1, "rgba(236,91,86,.5)"], [0, C("--line")],
                         [wt.os_level1, "rgba(38,176,122,.5)"], [wt.os_level2, bull]])
     w1.createPriceLine({ price: +v, color: c, lineWidth: 1, lineStyle: 2, axisLabelVisible: v !== 0, title: "" });
   const zoneDots = [];
   for (let i = 1; i < R.L; i++) {
-    const a = R.wt.wt1[i], p = R.wt.wt1[i - 1];
-    if (a <= wt.os_level1 && !(p <= wt.os_level1)) zoneDots.push({ time: T[i], position: "belowBar", color: bull, shape: "circle", size: 0.5 });
-    if (a >= wt.ob_level1 && !(p >= wt.ob_level1)) zoneDots.push({ time: T[i], position: "aboveBar", color: bear, shape: "circle", size: 0.5 });
+    if (R.wtxUp[i]) zoneDots.push({ time: T[i], position: "inBar", color: "#f5d90a", shape: "circle", size: 1.4 });
+    else if (R.wtxDn[i]) zoneDots.push({ time: T[i], position: "inBar", color: "#f5d90a", shape: "circle", size: 1.4 });
+    else if (R.wtxAll[i]) zoneDots.push({ time: T[i], position: "inBar", color: R.wt.wt1[i] > R.wt.wt2[i] ? bull : bear, shape: "circle", size: 0.5 });
   }
   LW.createSeriesMarkers(w1, zoneDots);
   const panes = [[pane, 120]];
@@ -295,7 +303,8 @@ function drawChart(box, b, row) {
   // açıklama
   const lg = [];
   lg.push(`<span><i class="tri-up"></i> güçlü yükseliş</span>`, `<span><i class="tri-dn"></i> güçlü düşüş</span>`,
-          `<span><i class="dot" style="background:${acc}"></i> zayıf (RSI teyidi yok)</span>`);
+          `<span><i class="dot" style="background:#9aa5b4"></i> zayıf (RSI teyidi yok)</span>`);
+  lg.push(`<span><i class="dot" style="background:#f5d90a"></i> WT bölge içi kesişim</span>`);
   if (R.st) lg.push(`<span><i class="sw" style="background:${bull}"></i><i class="sw" style="background:${bear}"></i> Supertrend</span>`);
   if (R.ef) lg.push(`<span><i class="sw" style="background:${acc}"></i> EMA${CFG.ema.fast}</span><span><i class="sw" style="background:#6aa6f8"></i> EMA${CFG.ema.slow}</span>`);
   $("#chartInfo").innerHTML = `<div class="legend">${lg.join("")}</div>
@@ -327,9 +336,11 @@ function renderSettings() {
       <div class="params">${numIn("ema_fast", "Hızlı", CFG.ema.fast)}${numIn("ema_slow", "Yavaş", CFG.ema.slow)}</div></div>
     <div class="opt"><div class="hd"><label for="macd_on">MACD kesişimi<small>MACD sinyal çizgisini keser</small></label>${toggle("macd_on", CFG.macd.on)}</div>
       <div class="params">${numIn("macd_fast", "Hızlı", CFG.macd.fast)}${numIn("macd_slow", "Yavaş", CFG.macd.slow)}${numIn("macd_sig", "Sinyal", CFG.macd.sig)}</div></div>
+    <div class="opt"><div class="hd"><label for="wtx_on">WT alpha kesişimi<small>Oversold'da WT1 WT2'yi yukarı, overbought'ta aşağı keser</small></label>${toggle("wtx_on", CFG.wtx.on)}</div>
+      <div class="params">${numIn("wtx_lb", "Son kaç bar", CFG.wtx.lookback)}</div></div>
     <div class="opt"><div class="params">
       ${sel("combine", "Birden fazla açıksa", CFG.combine, [["any", "Herhangi"], ["all", "Hepsi"]])}
-      ${numIn("lookback", "Son kaç bar", CFG.lookback)}</div></div>
+      ${numIn("lookback", "Son kaç bar (ST/EMA/MACD)", CFG.lookback)}</div></div>
   </section>
   <section class="sec"><h2>RSI teyidi</h2>
     <div class="status">Ayırıcı: RSI teyidi olan sinyal GÜÇLÜ, olmayan ZAYIF sayılır. Zorunlu: teyitsiz sinyaller gizlenir. Kesişim: yükselişte RSI 30 veya 50'yi yukarı keser, düşüşte 70 veya 50'yi aşağı keser. Seviye: RSI 50'nin üstünde (yükseliş) veya altında (düşüş).</div>
@@ -366,6 +377,7 @@ function readSettings() {
     st: { on: v("st_on").checked, atr: n("st_atr", 10), mult: n("st_mult", 3, 0.1) },
     ema: { on: v("ema_on").checked, fast: n("ema_fast", 5), slow: n("ema_slow", 12) },
     macd: { on: v("macd_on").checked, fast: n("macd_fast", 12), slow: n("macd_slow", 26), sig: n("macd_sig", 9) },
+    wtx: { on: v("wtx_on").checked, lookback: n("wtx_lb", 3) },
     combine: v("combine").value,
     rsi: { role: v("rsi_role").value, mode: v("rsi_mode").value, len: n("rsi_len", 14, 2) },
     lookback: n("lookback", 2), rsiLookback: n("rsi_lb", 3),
@@ -436,14 +448,16 @@ async function runOnly() {
 
 // ------------------------------------------------------------ olaylar
 function toast(t) { const e = $("#toast"); e.textContent = t; e.classList.add("on"); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove("on"), 2200); }
-function saveUI() { store.set("wt_ui", { market: UI.market, tf: UI.tf, view: UI.view, fSig: UI.fSig, fList: UI.fList, deep: UI.deep }); }
+function saveUI() { store.set("wt_ui", { market: UI.market, tf: UI.tf, view: UI.view, fSig: UI.fSig, fList: UI.fList, deep: UI.deep, wtxOnly: UI.wtxOnly }); }
 
 $("#segMarket").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; UI.market = b.dataset.v; shown = 150; saveUI(); setSeg("segMarket", UI.market); loadDataset(); });
 $("#segTf").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; UI.tf = b.dataset.v; shown = 150; saveUI(); setSeg("segTf", UI.tf); loadDataset(); });
 $("#segView").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; UI.view = b.dataset.v; shown = 150; saveUI(); render(); $("#main").scrollTop = 0; });
 $("#chips").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.f === "deep") UI.deep = !UI.deep; else UI[b.dataset.f] = b.dataset.v;
+  if (b.dataset.f === "deep") UI.deep = !UI.deep;
+  else if (b.dataset.f === "wtxOnly") UI.wtxOnly = !UI.wtxOnly;
+  else UI[b.dataset.f] = b.dataset.v;
   saveUI(); render();
 });
 $("#search").addEventListener("input", () => { shown = 150; render(); });
@@ -480,6 +494,7 @@ $("#btnCopy").addEventListener("click", async () => {
     const d = META.breakout_defaults;   // sunucu config.yaml'daki varsayılanları uygula
     CFG.st.atr = d.supertrend_atr; CFG.st.mult = d.supertrend_mult; CFG.ema.fast = d.ema_fast; CFG.ema.slow = d.ema_slow;
     CFG.rsi.len = d.rsi_len; CFG.rsi.mode = d.rsi_mode; CFG.lookback = d.lookback; CFG.rsiLookback = d.rsi_lookback;
+    if (d.wt_cross != null) CFG.wtx.on = !!d.wt_cross; if (d.wt_cross_lookback) CFG.wtx.lookback = d.wt_cross_lookback;
     CFG.obBull = !!d.overbought_bullish_continuation; CFG.osBear = !!d.oversold_bearish_continuation;
   }
   await loadDataset();
