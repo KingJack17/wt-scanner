@@ -3,8 +3,8 @@
   "n2": 21,
   "signal": 4,
   "os_level1": -45,
-  "os_level2": -55,
+  "os_level2": -53,
   "ob_level1": 45,
-  "ob_level2": 55,
+  "ob_level2": 53,
   "keep_after_exit": 10
 }
