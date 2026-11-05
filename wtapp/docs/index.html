@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WT Tarayıcı">
+<meta name="theme-color" content="#0d1116">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>WT Tarayıcı</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Tek tema: gece terminali. Düzen: üstte sabit kontrol bandı, altında kaydırılan kart listesi; grafik ve ayarlar tam ekran panel. */
+  --bg: #0d1116;
+  --surface: #151b22;
+  --raise: #1c242e;
+  --line: #26303c;
+  --text: #e4e8ee;
+  --muted: #8793a3;
+  --accent: #e8b04a;
+  --bull: #26b07a;
+  --bear: #ec5b56;
+  --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 15px; }
+body { overscroll-behavior-y: none; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.hidden { display: none !important; }
+
+#app { height: 100%; display: flex; flex-direction: column; }
+.top { padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; background: var(--bg); border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
+.brand h1 .wave { color: var(--accent); font-family: var(--font-num); font-weight: 600; }
+.brand .upd { font-size: 12px; color: var(--muted); }
+.iconbtn { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; width: 38px; height: 38px; display: grid; place-items: center; }
+.iconbtn svg { width: 19px; height: 19px; }
+
+.seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg button { flex: 1; border: 0; background: transparent; padding: 7px 4px; border-radius: 7px; font-size: 14px; font-weight: 500; color: var(--muted); }
+.seg button.on { background: var(--raise); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+.seg button .n { font-family: var(--font-num); font-size: 12px; color: var(--muted); margin-left: 4px; }
+.seg button.on .n { color: var(--accent); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.tools { display: flex; gap: 8px; align-items: center; }
+.search { flex: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; font-size: 15px; min-width: 0; }
+.search::placeholder { color: var(--muted); }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chip { flex: none; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 5px 11px; font-size: 13px; }
+.chip.on { border-color: var(--accent); color: var(--accent); background: rgba(232,176,74,.08); }
+
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px calc(env(safe-area-inset-bottom) + 84px); display: grid; gap: 8px; align-content: start; }
+.summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 9px 11px; }
+.tile .k { font-size: 11.5px; color: var(--muted); }
+.tile .v { font-family: var(--font-num); font-size: 19px; font-weight: 600; margin-top: 2px; }
+.tile .v.bull { color: var(--bull); } .tile .v.bear { color: var(--bear); }
+.note { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 11px 12px 11px 15px; display: grid; gap: 7px; position: relative; text-align: left; width: 100%; }
+.card::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--line); }
+.card.bull::before { background: var(--bull); } .card.bear::before { background: var(--bear); }
+.card .l1 { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.card .sym { font-size: 16.5px; font-weight: 700; letter-spacing: .2px; }
+.card .ex { font-size: 11.5px; color: var(--muted); margin-left: 6px; font-weight: 400; }
+.card .px { font-family: var(--font-num); font-size: 14.5px; }
+.card .l2 { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.card .l3 { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.card .l3 b { color: var(--text); font-weight: 500; font-family: var(--font-num); }
+.tag { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); letter-spacing: .3px; }
+.tag.bull { color: var(--bull); border-color: rgba(38,176,122,.45); background: rgba(38,176,122,.1); }
+.tag.bear { color: var(--bear); border-color: rgba(236,91,86,.45); background: rgba(236,91,86,.1); }
+.tag.strong { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.tag.weak { color: var(--accent); border-color: rgba(232,176,74,.5); }
+.tag.deep { color: var(--text); border-color: var(--muted); }
+.tag.trig { font-family: var(--font-num); font-weight: 500; color: var(--text); background: var(--raise); }
+.empty { text-align: center; color: var(--muted); padding: 40px 10px; line-height: 1.5; }
+.more { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r); padding: 11px; color: var(--text); }
+
+.fab { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 14px); display: flex; gap: 8px; }
+.fab button { flex: 1; border: 1px solid var(--line); background: var(--raise); border-radius: 12px; padding: 12px; font-weight: 600; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.fab button.primary { background: var(--accent); color: #1a1406; border-color: var(--accent); }
+
+/* Paneller */
+.sheet { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: flex; flex-direction: column; }
+.sheet header { padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.sheet header .t { flex: 1; min-width: 0; }
+.sheet header .t .a { font-weight: 700; font-size: 17px; }
+.sheet header .t .b { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.linkbtn { color: var(--accent); text-decoration: none; font-size: 14px; font-weight: 600; border: 1px solid rgba(232,176,74,.45); border-radius: 9px; padding: 7px 10px; white-space: nowrap; }
+#chartBox { flex: 1; min-height: 0; position: relative; }
+#chartInfo { padding: 9px 14px calc(env(safe-area-inset-bottom) + 10px); border-top: 1px solid var(--line); display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+#chartInfo .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+#chartInfo .legend span { display: inline-flex; align-items: center; gap: 5px; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.tri-up { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid var(--bull); }
+.tri-dn { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 9px solid var(--bear); }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+.form { flex: 1; overflow-y: auto; padding: 14px 16px calc(env(safe-area-inset-bottom) + 30px); display: grid; gap: 14px; align-content: start; }
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; display: grid; gap: 11px; }
+.sec h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); font-weight: 600; }
+.sec h2 .main { color: var(--accent); }
+.opt { display: grid; gap: 8px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+.opt:last-child { border-bottom: 0; padding-bottom: 0; }
+.opt .hd { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.opt .hd label { font-weight: 600; }
+.opt .hd small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 2px; }
+.params { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.params label { font-size: 11.5px; color: var(--muted); display: grid; gap: 4px; }
+.params input, .params select, .wide input { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; font-family: var(--font-num); font-size: 15px; width: 100%; }
+.params select { font-family: var(--font-body); font-size: 14px; }
+.wide { display: grid; gap: 4px; font-size: 11.5px; color: var(--muted); }
+.wide input { font-family: var(--font-body); font-size: 14px; }
+.sw-toggle { position: relative; width: 46px; height: 28px; flex: none; }
+.sw-toggle input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; cursor: pointer; z-index: 1; }
+.sw-toggle span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: background .15s; }
+.sw-toggle span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--text); transition: transform .15s; }
+.sw-toggle input:checked + span { background: var(--accent); }
+.sw-toggle input:checked + span::after { transform: translateX(18px); background: #1a1406; }
+.sw-toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { border: 1px solid var(--line); background: var(--raise); border-radius: 10px; padding: 11px; font-weight: 600; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1406; }
+.btn:disabled { opacity: .5; }
+.status { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.status.ok { color: var(--bull); } .status.err { color: var(--bear); }
+
+#toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 80px); transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 14px; border-radius: 9px; font-size: 14px; font-weight: 500; z-index: 50; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90%; }
+#toast.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (min-width: 720px) { main, .form { max-width: 720px; width: 100%; margin: 0 auto; } .fab { max-width: 688px; margin: 0 auto; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <div>
+        <h1><span class="wave">∿</span> WT Tarayıcı</h1>
+        <div class="upd" id="upd">Yükleniyor…</div>
+      </div>
+      <button class="iconbtn" id="btnSettings" aria-label="Ayarlar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
+    <div class="row2">
+      <div class="seg" id="segMarket">
+        <button data-v="us">US</button><button data-v="crypto">Kripto</button><button data-v="bist">BIST</button>
+      </div>
+      <div class="seg" id="segTf">
+        <button data-v="daily">Kısa · G</button><button data-v="weekly">Uzun · H</button>
+      </div>
+    </div>
+    <div class="seg" id="segView">
+      <button data-v="signals">Sinyaller<span class="n" id="nSig"></span></button>
+      <button data-v="oversold">Oversold<span class="n" id="nOs"></span></button>
+      <button data-v="overbought">Overbought<span class="n" id="nOb"></span></button>
+    </div>
+    <div class="tools">
+      <input class="search" id="search" type="search" placeholder="Sembol ara" autocomplete="off" autocapitalize="characters">
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+  <main id="main"></main>
+  <div class="fab">
+    <button id="btnCopy">TradingView listesini kopyala</button>
+  </div>
+</div>
+
+<div class="sheet hidden" id="chartView" role="dialog" aria-label="Grafik">
+  <header>
+    <button class="iconbtn" id="btnBack" aria-label="Geri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="t"><div class="a" id="cSym"></div><div class="b" id="cSub"></div></div>
+    <a class="linkbtn" id="cTv" href="#" target="_blank" rel="noopener">TradingView ↗</a>
+  </header>
+  <div id="chartBox"></div>
+  <div id="chartInfo"></div>
+</div>
+
+<div class="sheet hidden" id="settingsView" role="dialog" aria-label="Ayarlar">
+  <header>
+    <button class="iconbtn" id="btnSetBack" aria-label="Kapat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="t"><div class="a">Ayarlar</div><div class="b">Kırılım ayarları bu cihazda hemen uygulanır</div></div>
+  </header>
+  <div class="form" id="form"></div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="lw.js"></script>
+<script src="ind.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
