@@ -2,9 +2,10 @@ name: scan
 
 on:
   schedule:
-    - cron: "40 21 * * 1-5"   # US
-    - cron: "0 16 * * 1-5"    # BIST
-    - cron: "15 0 * * *"      # Kripto
+    - cron: "40 21 * * 1-5"          # US akşam — günlük + haftalık + 4S (kapanıştan sonra)
+    - cron: "0 16 * * 1-5"           # BIST — TR 19:00
+    - cron: "15 0 * * *"             # Kripto — UTC günlük mum kapanışından sonra
+    - cron: "5 15,16,19,20 * * 1-5"  # US gün içi 4S — sadece NY 11:xx ve 15:xx'te çalışır (yaz/kış saati otomatik)
   workflow_dispatch:
     inputs:
       market:
@@ -12,6 +13,11 @@ on:
         type: choice
         default: all
         options: [all, us, crypto, bist]
+      tf:
+        description: "Zaman dilimi (all = günlük + haftalık + 4S)"
+        type: choice
+        default: all
+        options: [all, both, 4h]
 
 permissions:
   contents: read
@@ -23,9 +29,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scan:
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+      market: ${{ steps.g.outputs.market }}
+      tf: ${{ steps.g.outputs.tf }}
+    steps:
+      - id: g
+        run: |
+          RUN=true
+          MARKET="${{ github.event.inputs.market }}"
+          TF="${{ github.event.inputs.tf }}"
+          case "${{ github.event.schedule }}" in
+            "40 21 * * 1-5") MARKET=us;     TF=all ;;
+            "0 16 * * 1-5")  MARKET=bist;   TF=both ;;
+            "15 0 * * *")    MARKET=crypto; TF=both ;;
+            "5 15,16,19,20 * * 1-5")
+              H=$(TZ=America/New_York date +%H)
+              if [ "$H" = "11" ] || [ "$H" = "15" ]; then MARKET=us; TF=4h; else RUN=false; fi ;;
+          esac
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "market=${MARKET:-all}" >> "$GITHUB_OUTPUT"
+          echo "tf=${TF:-all}" >> "$GITHUB_OUTPUT"
+          echo "Çalışacak mı: $RUN · piyasa: ${MARKET:-all} · zaman dilimi: ${TF:-all}"
+
+  scan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: wtapp
@@ -47,25 +80,16 @@ jobs:
           key: state-${{ github.run_id }}
           restore-keys: state-
 
-      - name: Piyasayı belirle
-        id: m
+      - name: Uygulamadan kaydedilen ayarlar
         run: |
-          MARKET="${{ github.event.inputs.market }}"
-          case "${{ github.event.schedule }}" in
-            "40 21 * * 1-5") MARKET=us ;;
-            "0 16 * * 1-5")  MARKET=bist ;;
-            "15 0 * * *")    MARKET=crypto ;;
-          esac
-          echo "market=${MARKET:-all}" >> "$GITHUB_OUTPUT"
-
-      - name: WT parametreleri (uygulamadan kaydedilen)
-        run: if [ -f ../wt_params.json ]; then cp ../wt_params.json wt_params.json; fi
+          if [ -f ../wt_params.json ]; then cp ../wt_params.json wt_params.json; fi
+          if [ -f ../my_symbols.json ]; then cp ../my_symbols.json my_symbols.json; fi
 
       - name: Tara
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scan.py --market ${{ steps.m.outputs.market }} --tf both
+        run: python scan.py --market ${{ needs.gate.outputs.market }} --tf ${{ needs.gate.outputs.tf }}
 
       - name: Durumu kaydet
         if: always()
