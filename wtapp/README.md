@@ -41,11 +41,18 @@ Repo → Settings → Secrets and variables → Actions → `TELEGRAM_TOKEN` ve 
 ## Zamanlama
 | Piyasa | Saat | Tarar |
 |---|---|---|
-| US | Hafta içi 21:40 UTC (NY kapanışından sonra) | günlük + haftalık |
+| US | Hafta içi 21:40 UTC (NY kapanışından sonra) | günlük + haftalık + 4 saatlik |
+| US gün içi | Hafta içi NY 11:05 ve 15:05 | 4 saatlik (son bar canlı, henüz kapanmamış) |
 | BIST | Hafta içi 16:00 UTC (TR 19:00) | günlük + haftalık |
 | Kripto | Her gün 00:15 UTC | günlük + haftalık |
 
 Haftalık listeler sadece hafta kapandığında değişir, çünkü bitmemiş barlar hiçbir zaman kullanılmaz.
+
+## Uygulama
+- **Sinyaller:** Seçili piyasadaki tüm zaman dilimlerinin kırılımları tek listede ve puana göre sıralı. **YENİ** = sinyal son barda başladı. Puan (0–100): RSI teyidi, tetikleyici sayısı, WT kesişimi, ±53 derinliği, tazelik.
+- **WT Listeleri:** 4S / Günlük / Haftalık × Oversold / Overbought listeleri. WT kesişimi filtresi.
+- **İzleme:** Kendi sembollerin. WT bölgesinde olmasalar da taranır. Kaydetmek için GitHub token gerekir (Ayarlar). Liste reponun en üstündeki `my_symbols.json` dosyasına yazılır.
+- **Grafik:** Parmağını gezdirince açılış, yüksek, düşük, kapanış ve WT/RSI değerleri görünür.
 
 ## Uygulamadaki ayarlar
 - **WT alpha (ana gösterge):** n1, n2, sinyal SMA, OS1/OS2/OB1/OB2 bantları, çıkıştan sonra listede tutma süresi. Kaydedince `wt_params.json` güncellenir ve tüm piyasalar yeniden taranır.
@@ -80,7 +87,8 @@ python tools/build_preview.py         # demo verisiyle tek dosyalık preview.htm
 | `wt_params.json` | WT alpha parametreleri (uygulama bu dosyayı günceller) |
 | `bist_symbols.txt` | BIST sembol listesi |
 | `docs/` | Web uygulaması |
-| `.github/workflows/scan.yml` | Zamanlanmış tarama ve yayın |
+| `tools/scan.yml` | Reponun en üstündeki `.github/workflows/scan.yml` dosyasının güncel hali |
+| `my_symbols.json` | İzleme listesi (uygulama reponun en üstündeki kopyayı günceller) |
 
 ## Bilinmesi gerekenler
 - Veriler Yahoo Finance'ten (resmî olmayan API) ve borsaların açık API'lerinden geliyor. Yahoo zaman zaman GitHub sunucularından gelen istekleri sınırlayabilir. Bir tarama başarısız olursa bir sonraki zamanlanmış çalışma tekrar dener.

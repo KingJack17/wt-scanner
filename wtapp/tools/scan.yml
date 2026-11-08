@@ -1,0 +1,119 @@
+name: scan
+
+on:
+  schedule:
+    - cron: "40 21 * * 1-5"          # US akşam — günlük + haftalık + 4S (kapanıştan sonra)
+    - cron: "0 16 * * 1-5"           # BIST — TR 19:00
+    - cron: "15 0 * * *"             # Kripto — UTC günlük mum kapanışından sonra
+    - cron: "5 15,16,19,20 * * 1-5"  # US gün içi 4S — sadece NY 11:xx ve 15:xx'te çalışır (yaz/kış saati otomatik)
+  workflow_dispatch:
+    inputs:
+      market:
+        description: "Piyasa"
+        type: choice
+        default: all
+        options: [all, us, crypto, bist]
+      tf:
+        description: "Zaman dilimi (all = günlük + haftalık + 4S)"
+        type: choice
+        default: all
+        options: [all, both, 4h]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+      market: ${{ steps.g.outputs.market }}
+      tf: ${{ steps.g.outputs.tf }}
+    steps:
+      - id: g
+        run: |
+          RUN=true
+          MARKET="${{ github.event.inputs.market }}"
+          TF="${{ github.event.inputs.tf }}"
+          case "${{ github.event.schedule }}" in
+            "40 21 * * 1-5") MARKET=us;     TF=all ;;
+            "0 16 * * 1-5")  MARKET=bist;   TF=both ;;
+            "15 0 * * *")    MARKET=crypto; TF=both ;;
+            "5 15,16,19,20 * * 1-5")
+              H=$(TZ=America/New_York date +%H)
+              if [ "$H" = "11" ] || [ "$H" = "15" ]; then MARKET=us; TF=4h; else RUN=false; fi ;;
+          esac
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "market=${MARKET:-all}" >> "$GITHUB_OUTPUT"
+          echo "tf=${TF:-all}" >> "$GITHUB_OUTPUT"
+          echo "Çalışacak mı: $RUN · piyasa: ${MARKET:-all} · zaman dilimi: ${TF:-all}"
+
+  scan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: wtapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: wtapp/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Önceki durumu geri yükle
+        uses: actions/cache/restore@v4
+        with:
+          path: wtapp/state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Uygulamadan kaydedilen ayarlar
+        run: |
+          if [ -f ../wt_params.json ]; then cp ../wt_params.json wt_params.json; fi
+          if [ -f ../my_symbols.json ]; then cp ../my_symbols.json my_symbols.json; fi
+
+      - name: Tara
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scan.py --market ${{ needs.gate.outputs.market }} --tf ${{ needs.gate.outputs.tf }}
+
+      - name: Durumu kaydet
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: wtapp/state
+          key: state-${{ github.run_id }}
+
+      - name: Siteyi hazırla
+        run: |
+          mkdir -p _site
+          cp -r docs/. _site/
+          cp -r state/data _site/data
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: wtapp/_site
+
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4

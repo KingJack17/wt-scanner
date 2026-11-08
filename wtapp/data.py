@@ -134,6 +134,81 @@ def fetch_us(cfg, symbols: list[str] | None = None) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ US 4 saatlik (gün içi)
+def _h4_from_1h(df: pd.DataFrame) -> pd.DataFrame:
+    """Saatlik barlardan seans hizalı 4 saatlik bar (09:30–13:30, 13:30–16:00 ET).
+    Index: New York saatiyle, saat dilimi bilgisi olmadan."""
+    if df.empty:
+        return df
+    idx = df.index
+    if idx.tz is not None:
+        idx = idx.tz_convert("America/New_York").tz_localize(None)
+    df = df.copy()
+    df.index = idx
+    mins = (idx.hour * 60 + idx.minute) - (9 * 60 + 30)
+    df = df[(mins >= 0) & (mins < 390)]
+    grp = (mins[(mins >= 0) & (mins < 390)] // 240).astype(int)
+    start = df.index.normalize() + pd.Timedelta(minutes=570) + pd.to_timedelta(grp * 240, unit="m")
+    out = df.groupby(start).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+    return out.dropna(subset=["close"])
+
+
+def h4_live(df: pd.DataFrame) -> bool:
+    """Son 4 saatlik bar henüz kapanmadı mı?"""
+    if df is None or df.empty:
+        return False
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    last = df.index[-1]
+    end = last + (pd.Timedelta(hours=4) if last.hour == 9 else pd.Timedelta(minutes=150))
+    return now < end
+
+
+def fetch_us_4h(cfg, symbols: list[str] | None = None) -> dict:
+    import yfinance as yf
+    uni = us_universe(cfg)
+    if symbols is not None:
+        keep = set(symbols)
+        uni = [u for u in uni if u[0] in keep]
+    tvmap = dict(uni)
+    tickers = [u[0] for u in uni]
+    log.info("US 4S evreni: %d sembol", len(tickers))
+    out = {}
+    chunk = cfg.get("chunk_size", 200)
+    for i in range(0, len(tickers), chunk):
+        part = tickers[i:i + chunk]
+        raw = None
+        for attempt in range(3):
+            try:
+                raw = yf.download(part, period=cfg.get("intraday_history", "180d"), interval="1h",
+                                  group_by="ticker", auto_adjust=False, threads=True, progress=False)
+                break
+            except Exception as e:
+                log.warning("yfinance 1h hata (%s): %s", attempt + 1, e)
+                time.sleep(3 * (attempt + 1))
+        if raw is None:
+            continue
+        for t in part:
+            try:
+                df = raw[t] if isinstance(raw.columns, pd.MultiIndex) else raw
+                df = df.rename(columns=str.lower)[OHLCV].dropna(subset=["close"])
+                df = df[df["close"] > 0]
+                if len(df) < 100:
+                    continue
+                if symbols is None:
+                    daily_vol = df["volume"].groupby(df.index.date).sum().tail(20).mean()
+                    if df["close"].iloc[-1] < cfg["min_price"] or daily_vol < cfg["min_avg_volume"]:
+                        continue
+                h4 = _h4_from_1h(df)
+                if len(h4) >= 60:
+                    out[t] = {"tv": tvmap[t], "h4": h4}
+            except KeyError:
+                pass
+        log.info("  indirildi %d/%d", min(i + chunk, len(tickers)), len(tickers))
+        time.sleep(1)
+    log.info("US 4S filtre sonrası: %d sembol", len(out))
+    return out
+
+
 def fetch_bist(cfg, symbols: list[str] | None = None) -> dict:
     with open(cfg["symbols_file"]) as f:
         tickers = sorted({l.strip().upper() for l in f if l.strip() and not l.startswith("#")})
@@ -186,7 +261,12 @@ def fetch_crypto(cfg, symbols: list[str] | None = None) -> dict:
                 cands.sort(reverse=True)
                 pairs = [s for _, s in cands[: cfg["top_n"]]]
             else:
-                pairs = [s for s in symbols if s in ex.markets]
+                pairs = []
+                for s_ in symbols:
+                    s_ = s_.upper()
+                    p_ = s_ if "/" in s_ else f"{s_}/{quote}"
+                    if p_ in ex.markets:
+                        pairs.append(p_)
             log.info("Kripto: %s üzerinden %d parite", exc["id"], len(pairs))
             out = {}
             for i, p in enumerate(pairs, 1):
@@ -233,4 +313,14 @@ def fetch_demo(market: str, n_symbols=150, seed=42) -> dict:
         w = df.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min",
                                       "close": "last", "volume": "sum"}).dropna()
         out[sym] = {"tv": f"{prefix}:{sym}", "daily": df, "weekly": w}
+        if market == "us":  # günde iki 4 saatlik bar (09:30, 13:30)
+            d2 = df.tail(200)
+            rows, times = [], []
+            for ts, r in d2.iterrows():
+                mid = (r.open + r.close) / 2 * (1 + rng.normal(0, vol / 3))
+                hi1, lo1 = max(r.open, mid) * (1 + abs(rng.normal(0, vol / 4))), min(r.open, mid) * (1 - abs(rng.normal(0, vol / 4)))
+                hi2, lo2 = max(mid, r.close) * (1 + abs(rng.normal(0, vol / 4))), min(mid, r.close) * (1 - abs(rng.normal(0, vol / 4)))
+                rows += [(r.open, hi1, lo1, mid, r.volume / 2), (mid, hi2, lo2, r.close, r.volume / 2)]
+                times += [ts + pd.Timedelta(minutes=570), ts + pd.Timedelta(minutes=810)]
+            out[sym]["h4"] = pd.DataFrame(rows, columns=OHLCV, index=pd.DatetimeIndex(times))
     return out

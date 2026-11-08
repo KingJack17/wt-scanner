@@ -2,7 +2,8 @@
 import os
 import sqlite3
 
-LISTS = ["short_oversold", "short_overbought", "long_oversold", "long_overbought"]
+LISTS = ["short_oversold", "short_overbought", "long_oversold", "long_overbought",
+         "intraday_oversold", "intraday_overbought"]
 
 WATCHLIST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS {t} (

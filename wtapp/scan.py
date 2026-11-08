@@ -23,7 +23,13 @@ import export as X
 from indicators import wavetrend, supertrend, ema, rsi, crossed_above, crossed_below, wt_zone_cross
 
 log = logging.getLogger("wtscanner")
-TF_MAP = {"daily": ("short", "daily"), "weekly": ("long", "weekly")}
+TF_MAP = {"daily": ("short", "daily"), "weekly": ("long", "weekly"), "4h": ("intraday", "h4")}
+
+
+def _ts(t) -> str:
+    """Bar zamanı: günlük/haftalıkta tarih, 4 saatlikte tarih + saat."""
+    t = pd.Timestamp(t)
+    return t.strftime("%Y-%m-%d %H:%M") if (t.hour or t.minute) else str(t.date())
 
 
 # ================================================================== Aşama 1
@@ -62,9 +68,9 @@ def zone_state(wt1: pd.Series, wt2: pd.Series, side: str, wc: dict) -> dict | No
         "wt1": round(float(wt1.iloc[-1]), 2),
         "wt2": round(float(wt2.iloc[-1]), 2) if pd.notna(wt2.iloc[-1]) else None,
         "peak_wt1": round(float(peak), 2),
-        "first_seen_date": str(wt1.index[start].date()),
-        "last_seen_date": str(wt1.index[j].date()),
-        "bar_date": str(wt1.index[-1].date()),
+        "first_seen_date": _ts(wt1.index[start]),
+        "last_seen_date": _ts(wt1.index[j]),
+        "bar_date": _ts(wt1.index[-1]),
         "bars_in_zone": int(j - start + 1),
         "bars_since_exit": int(since_exit),
         "status": "active" if since_exit == 0 else "exited",
@@ -212,37 +218,87 @@ def telegram(cfg, text: str):
 FETCHERS = {"us": D.fetch_us, "crypto": D.fetch_crypto, "bist": D.fetch_bist}
 
 
+def load_watch(market: str) -> list[str]:
+    """Kullanıcının izleme listesi (my_symbols.json, uygulamadan düzenlenir)."""
+    try:
+        with open("my_symbols.json") as f:
+            return [x.strip().upper() for x in json.load(f).get(market, []) if x.strip()]
+    except Exception:
+        return []
+
+
+def _resolve_watch(watch: list[str], universe: dict, market: str) -> tuple[list[str], list[str]]:
+    found, missing = [], []
+    for w in watch:
+        key = w.replace(".", "-") if market == "us" else w
+        if key in universe:
+            found.append(key)
+            continue
+        k2 = next((k for k in universe if k.split("/")[0] == w), None) if market == "crypto" else None
+        (found if k2 else missing).append(k2 or w)
+    return found, missing
+
+
+def _fetch(market, mcfg, tf_group, symbols=None):
+    if tf_group == "4h":
+        return D.fetch_us_4h(mcfg, symbols)
+    return FETCHERS[market](mcfg, symbols) if symbols is not None else FETCHERS[market](mcfg)
+
+
 def run_market(market, tfs, stage, cfg, demo):
     con = DB.connect(cfg["db_dir"], market)
     mcfg = cfg["markets"][market]
-    log.info("━━ %s ━━", market.upper())
-    if demo:
-        universe = D.fetch_demo(market)
-    elif stage == "2":  # sadece watchlist sembollerini indir
-        syms = sorted({r["symbol"] for t in DB.LISTS for r in DB.read_watchlist(con, t)})
-        if not syms:
-            log.warning("  watchlist boş — önce --stage 1 çalıştır")
-            return
-        universe = FETCHERS[market](mcfg, syms)
-    else:
-        universe = FETCHERS[market](mcfg)
+    if "4h" in tfs and not (market == "us" and mcfg.get("intraday")):
+        tfs = [t for t in tfs if t != "4h"]
+    if not tfs:
+        return
+    log.info("━━ %s (%s) ━━", market.upper(), ", ".join(tfs))
+    watch = load_watch(market)
     msg = []
-    for tf in tfs:
-        if stage in ("1", "both"):
-            log.info(" Aşama 1 (%s)", tf)
-            lists = stage1(con, universe, tf, cfg)
+    # günlük+haftalık aynı veriden, 4 saatlik ayrı veriden gelir
+    groups = [g for g in (["daily", "weekly"], ["4h"]) if any(t in tfs for t in g)]
+    demo_data = D.fetch_demo(market) if demo else None
+    for group in groups:
+        gkey = "4h" if group == ["4h"] else "dw"
+        if demo:
+            universe = {k: v for k, v in demo_data.items() if gkey == "dw" or "h4" in v}
+        elif stage == "2":
+            syms = sorted({r["symbol"] for tf in group if tf in tfs
+                           for side in ("oversold", "overbought")
+                           for r in DB.read_watchlist(con, f"{TF_MAP[tf][0]}_{side}")})
+            universe = _fetch(market, mcfg, gkey, syms) if syms else {}
         else:
-            h = TF_MAP[tf][0]
-            lists = {f"{h}_{s}": DB.read_watchlist(con, f"{h}_{s}") for s in ("oversold", "overbought")}
-        X.export_market_tf(market, tf, universe, lists, cfg)
-        if stage in ("2", "both"):
-            log.info(" Aşama 2 (%s)", tf)
-            sigs = stage2(con, universe, tf, cfg)
-            report(market, tf, sigs, cfg)
-            strong = [s for s in sigs if s["strength"] == "STRONG"]
-            if strong:
-                msg.append(f"{market.upper()} {tf}: " + ", ".join(
-                    f"{s['symbol']}({s['direction']})" for s in strong))
+            universe = _fetch(market, mcfg, gkey)
+        # izleme listesindeki semboller filtreye takılsa bile taransın
+        if watch and not demo:
+            _, missing = _resolve_watch(watch, universe, market)
+            if missing:
+                log.info("  izleme listesi için ek indirme: %s", missing)
+                try:
+                    universe.update(_fetch(market, mcfg, gkey, [m.replace(".", "-") for m in missing]))
+                except Exception as e:
+                    log.warning("  izleme listesi indirilemedi: %s", e)
+        wfound, wmissing = _resolve_watch(watch, universe, market)
+        for tf in group:
+            if tf not in tfs:
+                continue
+            if stage in ("1", "both"):
+                log.info(" Aşama 1 (%s)", tf)
+                lists = stage1(con, universe, tf, cfg)
+            else:
+                h = TF_MAP[tf][0]
+                lists = {f"{h}_{s}": DB.read_watchlist(con, f"{h}_{s}") for s in ("oversold", "overbought")}
+            X.export_market_tf(market, tf, universe, lists, cfg, watch=(wfound, wmissing),
+                               live=(tf == "4h" and not demo and D.h4_live(
+                                   next(iter(universe.values()))["h4"] if universe else None)))
+            if stage in ("2", "both"):
+                log.info(" Aşama 2 (%s)", tf)
+                sigs = stage2(con, universe, tf, cfg)
+                report(market, tf, sigs, cfg)
+                strong = [s for s in sigs if s["strength"] == "STRONG"]
+                if strong:
+                    msg.append(f"{market.upper()} {tf}: " + ", ".join(
+                        f"{s['symbol']}({s['direction']})" for s in strong))
     export_watchlists(con, market, cfg)
     if msg:
         telegram(cfg, "\n".join(msg))
@@ -252,7 +308,8 @@ def run_market(market, tfs, stage, cfg, demo):
 def main():
     ap = argparse.ArgumentParser(description="WaveTrend bölge + kırılım tarayıcı")
     ap.add_argument("--market", default="us", choices=["us", "crypto", "bist", "all"])
-    ap.add_argument("--tf", default="both", choices=["daily", "weekly", "both"])
+    ap.add_argument("--tf", default="both", choices=["daily", "weekly", "4h", "both", "all"],
+                    help="both = günlük + haftalık, all = günlük + haftalık + 4 saatlik (sadece US)")
     ap.add_argument("--stage", default="both", choices=["1", "2", "both"])
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--demo", action="store_true", help="internetsiz sentetik veri ile test")
@@ -264,7 +321,7 @@ def main():
     with open(a.config) as f:
         cfg = yaml.safe_load(f)
     # WaveTrend parametreleri: wt_params.json (uygulamadan düzenlenir) > config.yaml
-    if os.path.exists("wt_params.json"):
+    if os.path.exists("wt_params.json"):  # noqa
         with open("wt_params.json") as f:
             cfg["wavetrend"].update(json.load(f))
     log.info("WaveTrend: %s", cfg["wavetrend"])
@@ -276,7 +333,7 @@ def main():
         cfg["db_dir"], cfg["output_dir"], cfg["data_dir"] = "state_demo/db", "state_demo/output", "state_demo/data"
     os.makedirs(cfg["data_dir"], exist_ok=True)
     markets = ["us", "crypto", "bist"] if a.market == "all" else [a.market]
-    tfs = ["daily", "weekly"] if a.tf == "both" else [a.tf]
+    tfs = {"both": ["daily", "weekly"], "all": ["daily", "weekly", "4h"]}.get(a.tf, [a.tf])
     failed = 0
     for m in markets:
         if not cfg["markets"][m].get("enabled", True):

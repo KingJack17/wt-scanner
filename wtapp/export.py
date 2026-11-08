@@ -28,16 +28,23 @@ def _r(x: float) -> float:
     return round(float(x), nd)
 
 
-def _pack(df: pd.DataFrame, n: int) -> dict:
+def _pack(df: pd.DataFrame, n: int, intraday: bool = False) -> dict:
     df = df.tail(n)
-    days = ((pd.to_datetime(df.index) - EPOCH).days).astype(int).tolist()
-    return {
-        "t": days,
+    idx = pd.to_datetime(df.index)
+    if intraday:  # New York duvar saati, saniye (grafik saatleri ET gösterir)
+        t = ((idx - EPOCH).total_seconds()).astype("int64").tolist()
+    else:
+        t = ((idx - EPOCH).days).astype(int).tolist()
+    out = {
+        "t": t,
         "o": [_r(v) for v in df["open"]],
         "h": [_r(v) for v in df["high"]],
         "l": [_r(v) for v in df["low"]],
         "c": [_r(v) for v in df["close"]],
     }
+    if intraday:
+        out["u"] = "s"
+    return out
 
 
 SHORT_KEYS = {  # satırları kısaltılmış anahtarlarla yaz
@@ -47,9 +54,13 @@ SHORT_KEYS = {  # satırları kısaltılmış anahtarlarla yaz
 }
 
 
-def export_market_tf(market: str, tf: str, universe: dict, lists: dict, cfg: dict):
-    frame = "daily" if tf == "daily" else "weekly"
-    horizon = "short" if tf == "daily" else "long"
+FRAMES = {"daily": ("daily", "short"), "weekly": ("weekly", "long"), "4h": ("h4", "intraday")}
+
+
+def export_market_tf(market: str, tf: str, universe: dict, lists: dict, cfg: dict,
+                     watch=([], []), live: bool = False):
+    frame, horizon = FRAMES[tf]
+    intra = tf == "4h"
     ddir = cfg["data_dir"]
     ex = cfg.get("export", {})
     nc, nchart = ex.get("compact_bars", 150), ex.get("chart_bars", 400)
@@ -65,17 +76,21 @@ def export_market_tf(market: str, tf: str, universe: dict, lists: dict, cfg: dic
         for r in rows:
             syms.add(r["symbol"])
             bar_date = max(bar_date or r["bar_date"], r["bar_date"])
+    wfound, wmissing = watch
+    out_lists["watch"] = [{"s": s, "tv": universe[s]["tv"], "c": _r(float(universe[s][frame]["close"].iloc[-1]))}
+                          for s in wfound if universe.get(s, {}).get(frame) is not None and len(universe[s][frame])]
+    syms |= {r["s"] for r in out_lists["watch"]}
     for s in syms:
         df = universe[s][frame]
-        bars[s] = _pack(df, nc)
+        bars[s] = _pack(df, nc, intra)
         with open(os.path.join(bars_dir, _safe(s) + ".json"), "w") as f:
-            json.dump(_pack(df, nchart), f, separators=(",", ":"))
+            json.dump(_pack(df, nchart, intra), f, separators=(",", ":"))
 
     payload = {
         "market": market, "tf": tf, "bar_date": bar_date,
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "universe_size": len(universe), "wt": cfg["wavetrend"],
-        "lists": out_lists, "bars": bars,
+        "lists": out_lists, "bars": bars, "watch_missing": wmissing, "live": bool(live),
     }
     with open(os.path.join(ddir, f"{market}_{tf}.json"), "w") as f:
         json.dump(payload, f, separators=(",", ":"))
@@ -97,7 +112,12 @@ def _update_meta(market, tf, payload, cfg):
         "generated": payload["generated"], "bar_date": payload["bar_date"],
         "universe_size": payload["universe_size"],
         "oversold": len(payload["lists"]["oversold"]),
-        "overbought": len(payload["lists"]["overbought"]),
+        "overbought": len(payload["lists"]["overbought"]), "live": payload["live"],
     }
+    try:
+        with open("my_symbols.json") as f:
+            meta["watch"] = json.load(f)
+    except Exception:
+        meta.setdefault("watch", {})
     with open(path, "w") as f:
         json.dump(meta, f, indent=1)

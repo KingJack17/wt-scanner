@@ -49,6 +49,8 @@ markets:
     close_time: "16:00"
     timezone: America/New_York
     chunk_size: 200            # yfinance toplu indirme parça boyutu
+    intraday: true             # 4 saatlik (09:30 / 13:30 ET) gün içi tarama
+    intraday_history: 180d     # 4S için saatlik veri geçmişi
   crypto:
     enabled: true
     top_n: 200
